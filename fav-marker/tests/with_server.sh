@@ -26,8 +26,10 @@ if ! curl -fsS "http://127.0.0.1:$PORT/api/health" > /dev/null 2>&1; then
   echo "服务没起来, 日志:"; cat "$LOG"; exit 1
 fi
 
+T0=$(date +%s)
 PORT="$PORT" $PY "${1:-tests/e2e.py}"
 RC=$?
+echo "  ⏱ $(($(date +%s) - T0))s"
 
 # 等服务端把 ffmpeg 和临时分片收干净再返回, 否则下一个测试会被上一轮的
 # 残留目录干扰 (实测挂起中的 ffmpeg 收干净要 2~3 秒)

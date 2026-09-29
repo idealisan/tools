@@ -390,6 +390,10 @@ function step(delta) {
   if (next >= state.videos.length) { toast('已经是最后一个了'); return; }
   state.index = next;
   store.set('pos', current().id);
+  // 界面立刻跟着切, 不等装载。装载是串行的 (可能卡在等转码上),
+  // 要是等它做完才更新标题/序号, 快速连滑时屏幕会一直停在上一个视频上。
+  state.duration = current().duration || 0;
+  paintVideo();
   load();
 }
 

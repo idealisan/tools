@@ -23,7 +23,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 import media
 from library import Library
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 SORTS = ("folder", "wilson", "likes", "disliked", "recent", "unvoted")
 
@@ -50,6 +50,11 @@ MIME_BY_EXT = {
 #   磁盘  每会话一份 --hls-cache-mb, 超了 SIGSTOP 挂起 ffmpeg
 #   存活  客户端不请求就回收, 见 media.HLSServer._reap
 MAX_HLS_SESSIONS = 100
+
+# 首次取播放列表时的等待策略 (见 hls_playlist 的说明)
+PL_PLAYLIST_VOD_MAX = 120.0    # 不超过这个秒数就死等转完, 给完整 VOD 列表
+PL_PLAYLIST_WAIT = 8.0         # 短片最多等这么久
+PL_PLAYLIST_FIRST_SEG = 2.5    # 长片拿到第一个分片就放行, 边转边播
 
 
 def client_id() -> str:
@@ -119,23 +124,36 @@ def create_app(roots: list[str], db_path: str, hls: media.HLSServer,
         hls.touch(sid)
         hls.refresh(s)
 
-        # 边转边播时, 播放器几乎总是在第一个分片出现之前就来要播放列表。
-        # 短暂等一下, 还没有就回 404 —— 播放器会按直播流的标准做法重试,
-        # 直接给一个空的 #EXTM3U 反而会让 hls.js 解析失败。
-        deadline = time.monotonic() + 3.0
+        # 短视频 (几十秒) 转码也就两三秒。与其让播放器去处理"直播流"
+        # 那套语义 (轮询、MEDIA-SEQUENCE、可能中途撞上半截列表), 不如等它
+        # 转完, 直接给一个完整的 VOD 列表 —— 实测有些原生播放器在"列表还在
+        # 生长"时会停在中间某一片就不动了 (18 秒的片停在 3 秒处, 32 秒的
+        # 停在 11 秒处)。
+        #
+        # 长视频相反: 第一个分片一秒就出来了, 整体却永远转不完。所以按长度
+        # 分两档: 短片死等转完, 长片拿到第一个分片就放行。
+        started = time.monotonic()
+        deadline = started + (PL_PLAYLIST_WAIT if s.info.duration <= PL_PLAYLIST_VOD_MAX
+                              else PL_PLAYLIST_FIRST_SEG)
         while True:
             text = _read_text(os.path.join(s.tmpdir, "index.m3u8"))
             if text and "#EXTINF" in text:
-                break
-            if s.state != "running" or time.monotonic() >= deadline:
+                if "#EXT-X-ENDLIST" in text or s.state != "running":
+                    break                       # 转完了 -> 完整 VOD
+                if time.monotonic() >= deadline:
+                    break                       # 转不完 -> 边转边播
+            elif s.state != "running" and time.monotonic() >= deadline:
                 print(f"  hls 404 {sid[:8]}: 等不到分片 (state={s.state}, "
                       f"视频={s.vid[:8]}, err={s.error[:80]!r})", flush=True)
                 abort(404)
-            time.sleep(0.2)
+            time.sleep(0.15)
 
         # ffmpeg 正在追加时最后一行可能是半截的, 丢掉不完整的行。
         # 已剪掉的分片仍然留在列表里 —— 删条目会让播放器的整个时间轴平移。
         lines = [ln for ln in text.splitlines() if ln.startswith(("#", "seg"))]
+        if not any(ln.startswith("#EXTINF") for ln in lines):
+            print(f"  hls 404 {sid[:8]}: 列表里没有分片", flush=True)
+            abort(404)
         if s.base > 0.05:
             # 告诉播放器这条流在片子里是从哪儿开始的 (HLS 标准字段),
             # iOS 原生播放器靠它把 currentTime 对回真实时间

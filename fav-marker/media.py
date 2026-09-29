@@ -425,8 +425,10 @@ class HLSServer:
             if count < 3 or s.disk_bytes <= 0:
                 return
             avg = s.disk_bytes / count
-            # 留多少超前: 磁盘上限减去回看余量, 换算成分片数
-            budget = max(4, int(share * 0.85) // max(int(avg), 1))
+            # 留多少超前: 换算成分片数。
+            # 乘 0.8 而不是贴着上限, 是给"背压每 2 秒才复查一次"留余量 ——
+            # 这两秒里 ffmpeg 还能冲出去几片, 贴顶会稳定超一点点。
+            budget = max(4, int(share * 0.8) // max(int(avg), 1))
             ahead_segments = s.produced - playhead
             should_pause = ahead_segments >= budget
             if should_pause == s.throttled:

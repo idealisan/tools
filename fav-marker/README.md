@@ -84,6 +84,20 @@ Ctrl-C 立即收干净，下次启动还会扫掉上次崩溃留下的残留。
 
 播放列表里也会写 `#EXT-X-START:TIME-OFFSET`，iOS 原生播放器靠它自己对齐。
 
+### 短视频为什么不走"直播流"
+
+超过 120 秒的片子, 拿到第一个分片就开始播 (边转边播)。
+
+不到 120 秒的**故意等它整个转完再给播放列表** —— 也就是给一个完整的 VOD 列表
+(带 `#EXT-X-ENDLIST`), 而不是一条一直在生长的"直播流"。
+
+这不是洁癖: 实测有些原生播放器 (iOS Safari 走的 AVPlayer) 遇到还在生长的
+直播流, 会播到中途某一片就停住不动了。18 秒的片子停在 3 秒处、32 秒的停在
+11 秒处, 服务端日志里一片 200, 什么都没有 —— 但同一段视频走 hls.js
+(Android Chrome) 就完全正常。等转完给完整列表, 两条路径就一致了。
+
+等待有上限 (8 秒), 转不完就退回边转边播, 不会把请求挂死。
+
 ### 磁盘上限怎么真的生效
 
 转码比播放快好几倍，不管的话几秒钟就能把整部片子转完、磁盘爆掉。
@@ -220,7 +234,6 @@ MEDIA=/path/to/test/videos ./tests/with_server.sh tests/e2e.py
 ./tests/with_server.sh tests/autoplay.py     # 连播
 ./tests/with_server.sh tests/cap.py          # 磁盘上限 + 背压
 ./tests/with_server.sh tests/session_cap.py  # 并发上限
-./tests/with_server.sh tests/shots.py        # 截图
 SERVER_ARGS='--hls-cache-mb 8' ./tests/with_server.sh tests/segments.py   # 分片剪枝
 SERVER_ARGS='--max-sessions 2' ./tests/with_server.sh tests/session_cap.py  # 并发上限
 MEDIA=~/Movies ./tests/with_server.sh tests/sweep.py         # 整库逐个播一遍
