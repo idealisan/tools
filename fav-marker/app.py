@@ -23,7 +23,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 import media
 from library import Library
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 SORTS = ("folder", "wilson", "likes", "disliked", "recent", "unvoted")
 
@@ -113,6 +113,8 @@ def create_app(roots: list[str], db_path: str, hls: media.HLSServer,
     def hls_playlist(sid: str):
         s = hls.get(sid)
         if s is None:
+            # 会话已经不在了 —— 客户端切走、被回收、或者 sid 是旧的
+            print(f"  hls 404 {sid[:8]}: 会话不存在", flush=True)
             abort(404)
         hls.touch(sid)
         hls.refresh(s)
@@ -126,6 +128,8 @@ def create_app(roots: list[str], db_path: str, hls: media.HLSServer,
             if text and "#EXTINF" in text:
                 break
             if s.state != "running" or time.monotonic() >= deadline:
+                print(f"  hls 404 {sid[:8]}: 等不到分片 (state={s.state}, "
+                      f"视频={s.vid[:8]}, err={s.error[:80]!r})", flush=True)
                 abort(404)
             time.sleep(0.2)
 

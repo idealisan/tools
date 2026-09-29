@@ -343,15 +343,19 @@ async function commitSeek() {
   }
   // 超出已转出的范围: 从那儿重开一条流。offset 跟着变, 进度条不会归零
   showLoading(true, '跳转中…');
+  const token = ++state.loadToken;
   try {
     await teardownHls();
     el.ghost.style.width = '0%';
     await startHlsWithFallback(v, target);
+    if (token !== state.loadToken) return;      // 期间又切了视频
     await waitReady();
+    if (token !== state.loadToken) return;
     showLoading(false);
     await el.video.play().catch(() => {});
     toast(`已跳到 ${fmtTime(target)}`, '');
   } catch (err) {
+    if (token !== state.loadToken) return;
     showLoading(false);
     toast(err.message || '跳转失败');
   }
@@ -524,17 +528,46 @@ async function startHlsWithFallback(v, startAt) {
   attachHls(state.playlist);
 }
 
-async function load() {
+/* 装载必须串行。
+ *
+ * load() 里有好几个 await (拆旧会话 / 探测 / 开会话 / 等元数据),
+ * 快速连滑时两个 load 会交错: 前一个刚把 /api/hls/start 发出去, 后一个的
+ * teardown 还没看到 state.sid, 于是前一个的会话没人停, 播放器也可能指到
+ * 一个已经被停掉的会话 —— 表现就是"无法播放"。
+ *
+ * 所以做单飞: 同一时刻只跑一个, 中间来的请求只记一个待办,
+ * 跑完再补跑一次最新的。中间那些直接丢掉, 反正用户只关心最后停在哪个。
+ */
+let loading = false;
+let reloadPending = false;
+
+function load() {
+  reloadPending = true;
+  if (loading) return;
+  loading = true;
+  (async () => {
+    try {
+      while (reloadPending) {
+        reloadPending = false;
+        await doLoad();
+      }
+    } catch (err) {
+      toast(err.message || '播放失败');
+    } finally {
+      loading = false;
+    }
+  })();
+}
+
+async function doLoad() {
   const v = current();
   if (!v) return;
   const token = ++state.loadToken;
 
   await teardownHls();
+  if (token !== state.loadToken) return;   // 拆会话期间又被切了
   state.duration = v.duration || 0;
   paintVideo();
-
-  // 直放几乎立刻就绪, 只有走转码才需要等第一个分片
-  let transcoding = false;
 
   try {
     let info = v;
@@ -552,7 +585,6 @@ async function load() {
       el.video.src = v.stream_url;
     } else {
       if (!state.ffmpeg) throw new Error('服务端没有 ffmpeg, 无法转码这个格式');
-      transcoding = true;
       showLoading(true, '转码中…');
       await startHlsWithFallback(v, 0);
     }

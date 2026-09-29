@@ -226,6 +226,10 @@ SERVER_ARGS='--max-sessions 2' ./tests/with_server.sh tests/session_cap.py  # �
 MEDIA=~/Movies ./tests/with_server.sh tests/sweep.py         # 整库逐个播一遍
 MEDIA=~/Movies ./tests/with_server.sh tests/rapid.py         # 快速连续滑动
 
+# 竞态压测 (自己起服务, 用服务端日志核对 404 原因)
+MEDIA=~/Movies ./tests/with_server.sh - > /tmp/storm.log 2>&1 &
+SERVER_LOG=/tmp/storm.log ./.venv/bin/python tests/storm.py 40 120
+
 # 转码临时目录不留残留（会自己起停服务）
 MEDIA=/path/to/test/videos ./.venv/bin/python tests/leak_check.py
 ```
