@@ -648,7 +648,29 @@ el.hintClose.addEventListener('click', () => {
   store.set('hint', true);
 });
 
-window.addEventListener('pagehide', () => { if (state.sid) teardownHls(); });
+/* 服务端靠"还有没有人理我"决定什么时候回收会话。播放中播放器一直在取
+ * 分片, 够用; 但暂停的时候它什么都不取, 会被当成"人走了"而误回收。
+ * 所以不管播没在播, 都定期报个到。 */
+setInterval(() => {
+  if (!state.sid) return;
+  api('/api/hls/keepalive', { method: 'POST', body: { sid: state.sid } })
+    .catch((err) => {
+      if (/gone|404/.test(err.message)) state.sid = null;   // 服务端已经收掉了
+    });
+}, 12000);
+
+window.addEventListener('pagehide', () => {
+  if (!state.sid) return;
+  const sid = state.sid;
+  state.sid = null;
+  // 页面正在卸载, fetch 未必发得出去, 用 sendBeacon 兜住
+  const body = JSON.stringify({ sid });
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon('/api/hls/stop', new Blob([body], { type: 'application/json' }));
+    }
+  } catch { /* 关掉页面时失败就算了, 服务端会按存活超时回收 */ }
+});
 
 /* ------------------------------------------------------------------ 启动 */
 

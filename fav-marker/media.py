@@ -235,7 +235,7 @@ class HLSServer:
         encoder: str = "auto",
         crf: int = 23,
         max_height: int = 720,
-        idle_timeout: int = 180,
+        idle_timeout: int = 40,
         cache_mb: int = DEFAULT_CACHE_MB,
     ) -> None:
         self.tmp_root = tmp_root or os.environ.get("FAV_HLS_TMP") or tempfile.gettempdir()
@@ -340,24 +340,13 @@ class HLSServer:
             return self.sessions.get(sid)
 
     def count(self) -> int:
-        """真正在跑的转码数。
+        """当前登记在册的会话数 (只数正在转的)。
 
-        只数 running 的 —— 转完的会话只是躺在那儿等播放器抓完最后几片,
-        ffmpeg 已经退出了, 不占 CPU 也不该占名额。早先把它也算进去,
-        结果"看完一个紧接着打开下一个"会被自己的上限挡掉。
+        已转完的会话只是躺在那儿等播放器抓完最后几片, ffmpeg 已经退出,
+        不占 CPU 也不该占名额。真正决定残留多久的是下面的存活判定。
         """
         with self.lock:
             return sum(1 for s in self.sessions.values() if s.state == "running")
-
-    def reap_finished(self) -> int:
-        """开新会话前, 把已经转完的旧会话立刻收掉 (它们本来就等着被回收)。"""
-        with self.lock:
-            stale = [s for s in self.sessions.values() if s.state != "running"]
-            for s in stale:
-                self.sessions.pop(s.sid, None)
-        for s in stale:
-            self._cleanup(s)
-        return len(stale)
 
     def mark_served(self, sid: str, index: int) -> None:
         """记下客户端取到哪一片 —— 播放点就靠它推算, 剪枝时不会误伤。"""
@@ -419,12 +408,13 @@ class HLSServer:
         所以超前太多就把进程挂起, 播放追上来再放行 —— 磁盘占用和
         "播放点前面留多少" 就绑死在 --hls-cache-mb 上了。
 
-        上限是所有会话共享的: 同时有几个会话, 每个就只分到一份。
+        上限是**每个会话各一份**: 同时在看几个片子, 磁盘就占几倍。
+        真实用法基本只有 1~2 个, 想更省就调小 --hls-cache-mb。
         """
         proc = s.proc
         if proc is None or proc.poll() is not None or s.cancelled:
             return
-        share = self.cache_bytes // max(1, self.count())
+        share = self.cache_bytes
         with s.lock:
             if s.produced < 0:
                 return
@@ -486,6 +476,7 @@ class HLSServer:
             "max_height": self.max_height,
             "segment_seconds": SEGMENT_SECONDS,
             "cache_mb": self.cache_mb,
+            "idle_timeout": self.idle_timeout,
             "active": [
                 {"sid": s.sid, "video": s.vid, "state": s.state,
                  "progress": round(s.progress, 3), "error": s.error,
@@ -565,10 +556,10 @@ class HLSServer:
                     s.state = "error"
                     s.error = self._read_stderr(proc)
             s.last_seen = time.time()
-            # 让播放器抓完最后几片再清理
-            if s.state == "done" and not s.cancelled:
-                threading.Timer(30.0, self._cleanup, args=(s,)).start()
-            elif not s.cancelled:
+            # 不再"转完就固定留 30 秒" —— 那种做法有两个问题:
+            #   一是白占 30 秒, 二是客户端一旦离开就没必要留着;
+            # 改由存活判定统一处理 (见 _reap), 还在取分片的会话不会被动到。
+            if s.cancelled:
                 self._cleanup(s)
 
     @staticmethod
@@ -612,23 +603,28 @@ class HLSServer:
         with s.lock:
             shutil.rmtree(s.tmpdir, ignore_errors=True)
         with self.lock:
-            if self.sessions.get(s.sid) is s and s.state != "running":
+            # 分片已经没了, 这个会话就没有存在价值了, 无论之前是什么状态
+            if self.sessions.get(s.sid) is s:
                 self.sessions.pop(s.sid, None)
 
     def _reap(self) -> None:
-        """回收长时间无人访问的会话, 保证不留残留分片。"""
+        """回收客户端不再理会的会话。
+
+        不用"转完就固定留 N 秒"那种做法 —— 那种判据两边都会错:
+        客户端可能还在取最后几片 (提前收掉就播不了), 也可能早就走了
+        (硬留 30 秒就是残留)。这里只看"还有没有人理我":
+        播放列表、分片、心跳, 任何一次请求都会刷新 last_seen。
+        """
         while not self._stop.wait(2.0):
             now = time.time()
             with self.lock:
-                stale = [
-                    s for s in self.sessions.values()
-                    if s.state == "running" and now - s.last_seen > self.idle_timeout
-                ]
-            for s in stale:
-                with self.lock:
+                idle = [s for s in self.sessions.values()
+                        if now - s.last_seen > self.idle_timeout]
+                for s in idle:
                     self.sessions.pop(s.sid, None)
-                self._kill(s, "超时未播放")
-            # 没在请求分片的会话也要保持背压, 否则它会一路转完
+            for s in idle:
+                self._kill(s, "客户端不再请求")
+            # 还在的会话要保持背压, 否则没在取分片的话会一路转完撑爆磁盘
             with self.lock:
                 alive = list(self.sessions.values())
             for s in alive:

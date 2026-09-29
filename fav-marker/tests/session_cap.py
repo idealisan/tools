@@ -28,7 +28,7 @@ def main() -> int:
     need = [v["id"] for v in lib["videos"] if not v.get("direct")]
     print(f"\n  需要转码的视频: {len(need)} 个")
     if len(need) < MAX:
-        print(f"  跳过: 需要至少 {MAX} 个待转码视频")
+        print(f"  跳过: 只有 {len(need)} 个待转码视频, 不到上限 {MAX}")
         return 0
 
     results = []

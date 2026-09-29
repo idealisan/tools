@@ -49,7 +49,9 @@ python3 -m venv .venv
 | `--max-height` | 转码输出最高高度 | 720 |
 | `--crf` | libx264 画质，越小越清晰越慢 | 23 |
 | `--encoder` | `auto` / `libx264` / `h264_videotoolbox` / `h264_nvenc` | `auto` |
-| `--hls-cache-mb` | 转码分片在磁盘上最多留多少 MB | 100 |
+| `--hls-cache-mb` | **每个**转码会话的分片最多留多少 MB | 100 |
+| `--hls-idle` | 客户端多久不来要东西就回收会话（秒） | 40 |
+| `--max-sessions` | 同时最多几个转码会话 | 100 |
 
 也可以 `cp config.example.json config.json` 写死配置，命令行参数优先。
 
@@ -62,9 +64,14 @@ mp4 / H.264 这类浏览器能直接播的，**直接送原文件**，不转码�
 mkv、avi、wmv、hevc、ac3 之类浏览器播不了的，交给 **ffmpeg 边转边播**：
 输出 HLS 分片，手机当直播流看。转码跟着播放走，边看边转。
 
-**不留缓存**：分片只存在一个临时目录，客户端断开、3 分钟无操作、Ctrl-C 都会立刻收干净，
-下次启动还会扫掉上次崩溃留下的残留。磁盘占用由 `--hls-cache-mb` 封顶（默认 100MB），
-用完即删，不常驻。
+**不留缓存**：分片只存在一个临时目录。什么时候收？**看还有没有人在理它** ——
+播放列表、分片、客户端心跳，任何一次请求都会续命；连续 40 秒（`--hls-idle`）没有任何请求
+才回收。切走视频时客户端会立刻通知，基本是即时清理；客户端直接杀掉/断网，最多 40 秒后自愈。
+Ctrl-C 立即收干净，下次启动还会扫掉上次崩溃留下的残留。
+
+不用"转完就固定留 N 秒"那种做法 —— 那种判据两边都会错：客户端可能还在取最后几片
+（提前收掉就播不了），也可能早就走了（硬留就是残留）。客户端每 12 秒发一次心跳，
+所以**暂停中的视频不会被误回收**。
 
 ### 进度条为什么不会跳回 0
 
@@ -89,6 +96,8 @@ mkv、avi、wmv、hevc、ac3 之类浏览器播不了的，交给 **ffmpeg 边�
 剪枝只从播放点**前面**删 —— 这是关键。早期版本用 ffmpeg 自己的
 `delete_segments`，它删的是"最新 N 片"，而转码跑在播放头前面，
 等于把用户正在看的分片从磁盘上抹掉，超过 4 分钟的片子必中。
+
+上限是**每个会话各一份**：同时看 N 个片子就占 N 倍。正常使用只有 1~2 个。
 
 想跳更远就调大 `--hls-cache-mb`（比如 500），代价是磁盘和 CPU。
 
@@ -213,6 +222,9 @@ MEDIA=/path/to/test/videos ./tests/with_server.sh tests/e2e.py
 ./tests/with_server.sh tests/session_cap.py  # 并发上限
 ./tests/with_server.sh tests/shots.py        # 截图
 SERVER_ARGS='--hls-cache-mb 8' ./tests/with_server.sh tests/segments.py   # 分片剪枝
+SERVER_ARGS='--max-sessions 2' ./tests/with_server.sh tests/session_cap.py  # 并发上限
+MEDIA=~/Movies ./tests/with_server.sh tests/sweep.py         # 整库逐个播一遍
+MEDIA=~/Movies ./tests/with_server.sh tests/rapid.py         # 快速连续滑动
 
 # 转码临时目录不留残留（会自己起停服务）
 MEDIA=/path/to/test/videos ./.venv/bin/python tests/leak_check.py

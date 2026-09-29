@@ -401,7 +401,7 @@ class Library:
         return {"applied": True, "undone": False, "video": self.get(vid, client_id).to_json()}
 
     def undo(self, vid: str, client_id: str) -> dict:
-        """撤销本设备在���视频上的最近一次操作 (长按手势用)。"""
+        """撤销本设备在该视频上的最近一次操作 (长按手势用)。"""
         with self.connect() as conn:
             self._require(conn, vid)
             last = conn.execute(

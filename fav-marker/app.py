@@ -23,7 +23,7 @@ from flask import Flask, Response, abort, jsonify, render_template, request, sen
 import media
 from library import Library
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 SORTS = ("folder", "wilson", "likes", "disliked", "recent", "unvoted")
 
@@ -43,11 +43,13 @@ MIME_BY_EXT = {
     ".rmm": "application/vnd.rn-realmedia",
 }
 
-# 同一时间最多开几个转码。
-# 留 2 而不是 1: 手机上刷新页面时不会发 /api/hls/stop, 旧会话还在转,
-# 正好卡住 1 的话新会话必被拒。2 既能扛住刷新重开, 也能两台设备各看各的。
-# 磁盘上限是所有会话共享的 (见 media.HLSServer._pace), 所以不会翻倍。
-MAX_HLS_SESSIONS = 2
+# 同时允许的转码会话数。
+# 这只是"别让某个客户端永远开不出来"的兜底, 不是资源限制 ——
+# 真正常驻的就 1~2 个 (当前在看的那个), 开再大也占不了多少。
+# 资源本身由另外两样兜住:
+#   磁盘  每会话一份 --hls-cache-mb, 超了 SIGSTOP 挂起 ffmpeg
+#   存活  客户端不请求就回收, 见 media.HLSServer._reap
+MAX_HLS_SESSIONS = 100
 
 
 def client_id() -> str:
@@ -62,7 +64,8 @@ def _read_text(path: str) -> str:
         return ""
 
 
-def create_app(roots: list[str], db_path: str, hls: media.HLSServer) -> Flask:
+def create_app(roots: list[str], db_path: str, hls: media.HLSServer,
+               max_sessions: int = MAX_HLS_SESSIONS) -> Flask:
     app = Flask(__name__)
     lib = Library(roots, db_path)
 
@@ -174,10 +177,7 @@ def create_app(roots: list[str], db_path: str, hls: media.HLSServer) -> Flask:
         path = lib.path_of(vid)
         if path is None or not os.path.isfile(path):
             return jsonify({"error": "视频不存在"}), 404
-        # 先把转完的旧会话收掉: 手机上"看完一个马上点下一个"很常见,
-        # 不先收的话旧会话占着名额, 新会话直接被判成 503
-        hls.reap_finished()
-        if hls.count() >= MAX_HLS_SESSIONS:
+        if hls.count() >= max_sessions:
             return jsonify({"error": "转码任务太多, 等一会儿再试"}), 503
         session, err = hls.start(vid, path, start, info=_cached_probe(vid))
         if session is None:
@@ -208,6 +208,20 @@ def create_app(roots: list[str], db_path: str, hls: media.HLSServer) -> Flask:
     def api_hls_stop():
         body = request.get_json(silent=True) or {}
         hls.stop(str(body.get("sid", "")))
+        return jsonify({"ok": True})
+
+    @app.post("/api/hls/keepalive")
+    def api_hls_keepalive():
+        """客户端定期报个到。
+
+        没有它就没法区分"正在看但暂停了"和"早就走了" —— 暂停时客户端
+        不再取分片, 光靠分片请求判断存活会把暂停中的会话误回收掉。
+        """
+        body = request.get_json(silent=True) or {}
+        sid = str(body.get("sid", ""))
+        if hls.get(sid) is None:
+            return jsonify({"ok": False, "gone": True}), 404
+        hls.touch(sid)
         return jsonify({"ok": True})
 
     # --------------------------------------------------------------- API
@@ -291,7 +305,7 @@ def create_app(roots: list[str], db_path: str, hls: media.HLSServer) -> Flask:
 
     @app.get("/api/media/status")
     def api_media_status():
-        return jsonify({**hls.status_json(), "max_sessions": MAX_HLS_SESSIONS})
+        return jsonify({**hls.status_json(), "max_sessions": max_sessions})
 
     @app.get("/api/health")
     def api_health():
@@ -347,15 +361,19 @@ def main() -> None:
     parser.add_argument("--max-height", type=int, default=cfg.get("max_height", 720),
                         help="转码输出最高高度, 手机上 720 足够 (默认 720)")
     parser.add_argument("--hls-cache-mb", type=int, default=cfg.get("hls_cache_mb", media.DEFAULT_CACHE_MB),
-                        help="转码分片在磁盘上最多留多少 MB (默认 100)")
+                        help="单个转码会话的分片最多留多少 MB (默认 100)")
+    parser.add_argument("--hls-idle", type=int, default=cfg.get("hls_idle", 40),
+                        help="客户端多久不来要东西就回收会话 (秒, 默认 40)")
+    parser.add_argument("--max-sessions", type=int, default=cfg.get("max_sessions", MAX_HLS_SESSIONS),
+                        help="同时最多几个转码会话 (默认 100, 正常使用只有 1~2 个)")
     args = parser.parse_args()
 
     roots = [resolve(p) for p in (args.videos or cfg.get("video_roots") or ["."])]
     db_path = resolve(args.db)
 
     hls = media.HLSServer(encoder=args.encoder, crf=args.crf, max_height=args.max_height,
-                          cache_mb=args.hls_cache_mb)
-    app = create_app(roots, db_path, hls)
+                          cache_mb=args.hls_cache_mb, idle_timeout=args.hls_idle)
+    app = create_app(roots, db_path, hls, max_sessions=max(1, args.max_sessions))
     print(f"\n  v{__version__}   手机浏览器打开:  http://{local_ip()}:{args.port}\n", flush=True)
 
     # Ctrl-C / kill 时 Python 默认直接退出, atexit 不会跑, 转码就变成孤儿了
