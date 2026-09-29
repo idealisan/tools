@@ -1,0 +1,8 @@
+# 运行时依赖。只用两个, 刻意保持少 —— 这是个自用小工具。
+#
+# 系统依赖 (不装也能跑, 只是放不了 mkv/avi/hevc):
+#   macOS:      brew install ffmpeg
+#   Debian/Ubuntu: sudo apt install ffmpeg
+
+# Web 框架。3.0 起 send_file / Range 处理比较成熟
+Flask>=3.0,<4.0

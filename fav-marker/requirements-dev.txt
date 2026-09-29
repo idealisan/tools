@@ -1,0 +1,10 @@
+# 跑测试才需要。装完还要下载浏览器内核 (~150MB):
+#   pip install -r requirements-dev.txt
+#   playwright install chromium
+#
+# 浏览器端测试默认用系统已装的 Chrome (channel="chrome"),
+# 上面那条 playwright install 只在没有 Chrome 时才必需。
+
+-r requirements.txt
+
+playwright>=1.40

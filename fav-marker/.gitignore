@@ -1,0 +1,14 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# 累积的喜欢/不喜欢记录, 别提交
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# 本地配置
+config.json

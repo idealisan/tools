@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>视频收藏</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ff3d71'/%3E%3Cpath d='M13 10l9 6-9 6z' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body data-sort="{{ defaults.sort }}">
+
+<main id="stage">
+
+  <video id="player" playsinline webkit-playsinline preload="metadata"></video>
+
+  <div id="overlay" aria-hidden="true">
+    <div class="ov-icon"></div>
+    <div class="ov-label"></div>
+  </div>
+
+  <div id="centerPlay" class="center-play" hidden>
+    <svg viewBox="0 0 24 24" width="64" height="64"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+  </div>
+
+  <div id="loading" class="loading" hidden>
+    <span class="spin"></span><span id="loadingText">转码中…</span>
+  </div>
+
+  <div id="hint" class="hint">
+    <b>滑动操作</b>
+    <ul>
+      <li><i class="k">↑</i> 下一个<i class="k">↓</i> 上一个</li>
+      <li><i class="k">←</i> 喜欢<i class="k">→</i> 不喜欢</li>
+      <li><i class="k">轻点</i> 播放 / 暂停</li>
+      <li><i class="k">长按</i> 撤销上一次标记</li>
+    </ul>
+    <button id="hintClose" type="button">知道了</button>
+  </div>
+
+</main>
+
+<header id="bar">
+  <div class="bar-row">
+    <div id="pos" class="pos">—</div>
+    <div class="bar-actions">
+      <button id="sortBtn" type="button" class="chip" aria-haspopup="true">按文件名</button>
+      <button id="autoBtn" type="button" class="chip" aria-pressed="false">连播 关</button>
+      <button id="fsBtn" type="button" class="icon" title="全屏" aria-label="全屏">
+        <svg viewBox="0 0 24 24" width="20" height="20"><path d="M4 9V4h5v2H6v3H4zm11-5h5v5h-2V6h-3V4zM4 15h2v3h3v2H4v-5zm14 0h2v5h-5v-2h3v-3z" fill="currentColor"/></svg>
+      </button>
+    </div>
+  </div>
+  <div id="sortMenu" class="sort-menu" hidden></div>
+</header>
+
+<footer id="meta">
+  <div id="title" class="title">—</div>
+  <div class="tally">
+    <span class="t like">♥ <b id="cLike">0</b></span>
+    <span class="t dislike">👎 <b id="cDislike">0</b></span>
+    <span class="t label" id="cLabel">未标记</span>
+    <span class="t wilson" id="cWilson"></span>
+  </div>
+  <div id="bar-progress" class="progress">
+    <div id="bar-ghost"></div>
+    <div id="bar-fill"></div>
+  </div>
+  <div class="hint-inline">↑下一个 ↓上一个 ←喜欢 →不喜欢 · 长按撤销</div>
+</footer>
+
+<div id="toast" class="toast" hidden></div>
+
+<script>window.DEFAULTS = {{ defaults | tojson }};</script>
+<script src="{{ url_for('static', filename='vendor/hls.min.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
